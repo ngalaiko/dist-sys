@@ -1,0 +1,57 @@
+name: maelstrom
+inputs:
+  workload:
+    description: "What workload to run"
+    required: true
+  bin:
+    description: "Path to binary which runs a node"
+    required: true
+  node-count:
+    description: "How many nodes to run"
+    required: false
+    default: 0
+  time-limit:
+    description: "Excluding setup and teardown, how long should a test run for, in seconds?"
+    required: false
+    default: 60
+  rate:
+    description: "Approximate number of request/sec"
+    required: false
+    default: 5
+  availability:
+    description: "The fraction of client requests which must succeed. Either a number from 0 to 1 or total. If omitted, always valid."
+    required: false
+    default: "total"
+  nemesis:
+    description: "A comma-separated list of faults to inject."
+    required: false
+    default: ","
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        if [ -d "./maelstrom" ]; then
+          echo "MAELSTROM_INSTALLED=true" >> "$GITHUB_ENV"
+        fi
+
+    - if: env.MAELSTROM_INSTALLED != 'true'
+      uses: ConorMacBride/install-package@v1
+      with:
+        apt: graphviz gnuplot openjdk-17-jdk
+
+    - if: env.MAELSTROM_INSTALLED != 'true'
+      shell: bash
+      run: |
+        wget https://github.com/jepsen-io/maelstrom/releases/download/v0.2.3/maelstrom.tar.bz2 && \
+        tar -xf maelstrom.tar.bz2
+
+    - shell: bash
+      run: |
+        ./maelstrom/maelstrom test \
+          --workload "${{ inputs.workload }}" \
+          --bin "${{ inputs.bin }}" \
+          --node-count "${{ inputs.node-count }}" \
+          --time-limit "${{ inputs.time-limit }}" \
+          --availability "${{ inputs.availability }}" \
+          --nemesis "${{ inputs.nemesis }}"

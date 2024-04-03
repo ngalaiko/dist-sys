@@ -1,0 +1,45 @@
+name: Tests
+on:
+  push: {}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --all-features
+
+
+      - name: "Challenge #1: Echo"
+        uses: ./.github/actions/maelstrom-test
+        with: 
+          bin: target/release/maelstrom
+          workload: echo
+          node-count: 1
+          time-limit: 10
+
+      - name: "Challenge #2: Unique ID Generation"
+        uses: ./.github/actions/maelstrom-test
+        with: 
+          bin: target/release/maelstrom
+          workload: unique-ids
+          time-limit: 30
+          rate: 1000
+          node-count: 3
+          availability: total
+          nemesis: partition
+
+      - name: "Challenge #3a: Single-Node Broadcast"
+        uses: ./.github/actions/maelstrom-test
+        with: 
+          bin: target/release/maelstrom
+          workload: broadcast
+          node-count: 1
+          time-limit: 20
+          rate: 10
