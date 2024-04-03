@@ -40,6 +40,12 @@ impl MessageId {
 #[derive(Clone, Copy, Default)]
 pub struct NodeId(u64);
 
+impl From<NodeId> for u64 {
+    fn from(node_id: NodeId) -> u64 {
+        node_id.0
+    }
+}
+
 impl std::fmt::Display for NodeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "n{}", self.0)

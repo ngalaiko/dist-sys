@@ -38,6 +38,11 @@ enum Value {
     },
     InitOk {},
 
+    Generate {},
+    GenerateOk {
+        id: u64,
+    },
+
     Error {
         code: ErrorCode,
         text: String,
@@ -82,23 +87,47 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+struct Node {
+    id: id::NodeId,
+
+    ids_counter: std::sync::atomic::AtomicU64,
+}
+
+impl Node {
+    fn new(id: id::NodeId) -> Self {
+        Self {
+            id,
+            ids_counter: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn generate_id(&self) -> u64 {
+        let count = self.ids_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        u64::from(self.id) << 32 | count
+    }
+}
+
 fn main() {
-    let mut this_node_id = None;
+    let mut node: Option<Node> = None;
     let stdin = io::stdin();
+
     while let Some(line) = stdin.lock().lines().next() {
         let line = line.expect("IO error");
         let msg = serde_json::from_str::<Message>(&line).expect("JSON parse error");
 
-        let value = if this_node_id.is_some() {
+        let value = if let Some(node) = node.as_ref() { 
             match msg.body.value {
                 Value::Echo { echo } => Value::EchoOk { echo },
+                Value::Generate {  } => Value::GenerateOk { 
+                    id: node.generate_id()
+                },
                 _ => Value::Error {
                     code: ErrorCode::NotSupported,
                     text: "Not supported".to_string(),
                 },
             }
         } else if let Value::Init { node_id, .. } = msg.body.value {
-            this_node_id = Some(node_id);
+            node = Some(Node::new(node_id));
             Value::InitOk {}
         } else {
             Value::Error {
@@ -108,7 +137,7 @@ fn main() {
         };
 
         let reply = Message {
-            src: id::PeerId::Node(this_node_id.unwrap_or_default()),
+            src: id::PeerId::Node(node.as_ref().map(|node| node.id).unwrap_or_default()),
             dest: msg.src,
             body: Body {
                 msg_id: Some(id::MessageId::next()),
