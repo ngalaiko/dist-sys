@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 static MESSAGE_COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub struct MessageId(u64);
 
 impl std::fmt::Display for MessageId {
@@ -37,7 +37,7 @@ impl MessageId {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Eq, Hash, PartialEq)]
 pub struct NodeId(u64);
 
 impl From<NodeId> for u64 {
@@ -67,15 +67,18 @@ impl<'de> Deserialize<'de> for NodeId {
         D: serde::Deserializer<'de>,
     {
         let s: String = Deserialize::deserialize(deserializer)?;
-        if !s.starts_with('n') {
-            return Err(serde::de::Error::custom("NodeId must start with 'n'"));
+        if let Some(stripped) = s.strip_prefix('n') {
+            let num = stripped.parse().map_err(serde::de::Error::custom)?;
+            Ok(NodeId(num))
+        } else {
+            Err(serde::de::Error::custom(
+                "NodeId must start with 'n'",
+            ))
         }
-        let num = s[1..].parse().map_err(serde::de::Error::custom)?;
-        Ok(NodeId(num))
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct ClientId(u64);
 
 impl std::fmt::Display for ClientId {
@@ -99,15 +102,18 @@ impl<'de> Deserialize<'de> for ClientId {
         D: serde::Deserializer<'de>,
     {
         let s: String = Deserialize::deserialize(deserializer)?;
-        if !s.starts_with('c') {
-            return Err(serde::de::Error::custom("ClientId must start with 'c'"));
+        if let Some(striped) = s.strip_prefix('c') {
+            let num = striped.parse().map_err(serde::de::Error::custom)?;
+            Ok(ClientId(num))
+        } else {
+            Err(serde::de::Error::custom(
+                "ClientId must start with 'c'",
+            ))
         }
-        let num = s[1..].parse().map_err(serde::de::Error::custom)?;
-        Ok(ClientId(num))
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum PeerId {
     Node(NodeId),
     Client(ClientId),
@@ -137,15 +143,15 @@ impl<'de> Deserialize<'de> for PeerId {
         D: serde::Deserializer<'de>,
     {
         let s: String = Deserialize::deserialize(deserializer)?;
-        if s.starts_with('n') {
-            let num = s[1..].parse().map_err(serde::de::Error::custom)?;
+        if let Some(stripped) = s.strip_prefix('n') {
+            let num = stripped.parse().map_err(serde::de::Error::custom)?;
             Ok(PeerId::Node(NodeId(num)))
-        } else if s.starts_with('c') {
-            let num = s[1..].parse().map_err(serde::de::Error::custom)?;
+        } else if let Some(stripped) = s.strip_prefix('c') {
+            let num = stripped.parse().map_err(serde::de::Error::custom)?;
             Ok(PeerId::Client(ClientId(num)))
         } else {
             Err(serde::de::Error::custom(
-                "PeerId must start with 'n' or 'c'",
+                "Unknown id type",
             ))
         }
     }

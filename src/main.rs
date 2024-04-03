@@ -1,18 +1,22 @@
 mod id;
 
-use std::io;
+use std::collections::{HashMap, HashSet};
 use std::io::BufRead;
+use std::sync::Mutex;
+use std::{io, sync::Arc};
 
+use log::LevelFilter;
 use serde::{Deserialize, Serialize};
+use simplelog::{Config, TermLogger};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Message {
     src: id::PeerId,
     dest: id::PeerId,
     body: Body,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Body {
     #[serde(skip_serializing_if = "Option::is_none")]
     msg_id: Option<id::MessageId>,
@@ -22,7 +26,7 @@ struct Body {
     value: Value,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 enum Value {
     Echo {
@@ -38,10 +42,25 @@ enum Value {
     },
     InitOk {},
 
+    Broadcast {
+        message: id::MessageId,
+    },
+    BroadcastOk {},
+
+    Read {},
+    ReadOk {
+        messages: Vec<id::MessageId>,
+    },
+
     Generate {},
     GenerateOk {
         id: u64,
     },
+
+    Topology {
+        topology: HashMap<id::NodeId, Vec<id::NodeId>>,
+    },
+    TopologyOk {},
 
     Error {
         code: ErrorCode,
@@ -91,6 +110,7 @@ struct Node {
     id: id::NodeId,
 
     ids_counter: std::sync::atomic::AtomicU64,
+    messages: Arc<Mutex<HashSet<id::MessageId>>>,
 }
 
 impl Node {
@@ -98,12 +118,31 @@ impl Node {
         Self {
             id,
             ids_counter: std::sync::atomic::AtomicU64::new(0),
+            messages: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
     fn generate_id(&self) -> u64 {
-        let count = self.ids_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let count = self
+            .ids_counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         u64::from(self.id) << 32 | count
+    }
+
+    fn store_message(&self, message: id::MessageId) {
+        self.messages
+            .lock()
+            .expect("Mutex lock error")
+            .insert(message);
+    }
+
+    fn read_messages(&self) -> Vec<id::MessageId> {
+        self.messages
+            .lock()
+            .expect("Mutex lock error")
+            .iter()
+            .copied()
+            .collect()
     }
 }
 
@@ -111,16 +150,33 @@ fn main() {
     let mut node: Option<Node> = None;
     let stdin = io::stdin();
 
+    TermLogger::init(
+        LevelFilter::Info,
+        Config::default(),
+        simplelog::TerminalMode::Stderr,
+        simplelog::ColorChoice::Auto,
+    ).expect("Logger init error");
+
     while let Some(line) = stdin.lock().lines().next() {
         let line = line.expect("IO error");
+        log::info!("{:?}", line);
+
         let msg = serde_json::from_str::<Message>(&line).expect("JSON parse error");
 
-        let value = if let Some(node) = node.as_ref() { 
+        let value = if let Some(node) = node.as_ref() {
             match msg.body.value {
                 Value::Echo { echo } => Value::EchoOk { echo },
-                Value::Generate {  } => Value::GenerateOk { 
-                    id: node.generate_id()
+                Value::Generate {} => Value::GenerateOk {
+                    id: node.generate_id(),
                 },
+                Value::Broadcast { message } => {
+                    node.store_message(message);
+                    Value::BroadcastOk {}
+                }
+                Value::Read {} => Value::ReadOk {
+                    messages: node.read_messages(),
+                },
+                Value::Topology { topology: _ } => Value::TopologyOk {},
                 _ => Value::Error {
                     code: ErrorCode::NotSupported,
                     text: "Not supported".to_string(),
