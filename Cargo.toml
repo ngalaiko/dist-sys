@@ -1,7 +1,15 @@
 [package]
-name = "maelstrom"
+name = "maelstrom-node"
 version = "0.1.0"
 edition = "2021"
+
+[lib]
+name = "maelstrom"
+path = "src/lib.rs"
+
+[[bin]]
+name = "maelstrom-node"
+path = "src/main.rs"
 
 [dependencies]
 futures = "0.3.30"

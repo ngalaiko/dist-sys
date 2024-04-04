@@ -1,0 +1,105 @@
+name: Challanges
+on:
+  push: {}
+jobs:
+  challange-1:
+    name: "Challenge #1: Echo"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - uses: ./.github/actions/maelstrom-test
+        with: 
+          bin: target/release/maelstrom-node
+          workload: echo
+          node-count: 1
+          time-limit: 10
+
+  challange-2:
+    name: "Challenge #2: Unique ID Generation"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - uses: ./.github/actions/maelstrom-test
+        with: 
+          bin: target/release/maelstrom-node
+          workload: unique-ids
+          time-limit: 30
+          rate: 1000
+          node-count: 3
+          availability: total
+          nemesis: partition
+
+  challange-3a:
+    name: "Challenge #3a: Single-Node Broadcast"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - uses: ./.github/actions/maelstrom-test
+        with: 
+          bin: target/release/maelstrom-node
+          workload: broadcast
+          node-count: 1
+          time-limit: 20
+          rate: 10
+
+  challange-3b:
+    name: "Challenge #3b: Multi-Node Broadcast"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - uses: ./.github/actions/maelstrom-test
+        with: 
+          bin: target/release/maelstrom-node
+          workload: broadcast
+          node-count: 5
+          time-limit: 20
+          rate: 10
+
+  challange-3c:
+    name: "Challenge #3c: Fault Tolerant Broadcast"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - uses: ./.github/actions/maelstrom-test
+        with:
+          bin: target/release/maelstrom-node
+          workload: broadcast
+          node-count: 5
+          time-limit: 20
+          rate: 10
+          nemesis: partition
