@@ -1,140 +1,148 @@
-mod id;
-
-use std::collections::{HashMap, HashSet};
-use std::io;
-use std::io::{BufRead, Stdout, Write};
+use std::collections::HashSet;
+use std::sync::{atomic, Arc};
 
 use log::LevelFilter;
-use serde::{Deserialize, Serialize};
 use simplelog::{Config, TermLogger};
+use tokio::io;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::sync::{self, RwLock};
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Message {
-    src: id::PeerId,
-    dest: id::PeerId,
-    body: Body,
+use maelstrom::{ids, protocol};
+
+#[tokio::main]
+async fn main() {
+    TermLogger::init(
+        LevelFilter::Info,
+        Config::default(),
+        simplelog::TerminalMode::Stderr,
+        simplelog::ColorChoice::Auto,
+    )
+    .expect("Logger init error");
+
+    log::info!("Node starting");
+
+    let mut requests_rx = read_incoming_messages().await;
+    let (responses_tx, mut responses_rx) = sync::mpsc::channel(100);
+
+    let handle = tokio::spawn(async move {
+        let mut stdout = io::stdout();
+        while let Some(response) = responses_rx.recv().await {
+            let raw = serde_json::to_string(&response).expect("JSON serialize error");
+            stdout.write_all(raw.as_bytes()).await.expect("IO error");
+            stdout.write_all(b"\n").await.expect("IO error");
+        }
+    });
+
+    if let Some(node) = wait_for_init(&mut requests_rx, responses_tx).await {
+        listen(node, &mut requests_rx).await;
+    }
+
+    handle.await.expect("Task error");
+
+    log::info!("Node shutting down");
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Body {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    msg_id: Option<id::MessageId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    in_reply_to: Option<id::MessageId>,
-    #[serde(flatten)]
-    value: Value,
+async fn read_incoming_messages() -> sync::mpsc::Receiver<protocol::Message> {
+    let (tx, rx) = sync::mpsc::channel(100);
+    tokio::spawn(async move {
+        let stdin = io::stdin();
+        let mut lines = io::BufReader::new(stdin).lines();
+        while let Some(line) = lines.next_line().await.expect("IO error") {
+            let message =
+                serde_json::from_str::<protocol::Message>(&line).expect("JSON parse error");
+            tx.send(message).await.expect("Channel error");
+        }
+    });
+    rx
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "type")]
-enum Value {
-    Echo {
-        echo: String,
-    },
-    EchoOk {
-        echo: String,
-    },
-
-    Init {
-        node_id: id::NodeId,
-        node_ids: Vec<id::NodeId>,
-    },
-    InitOk {},
-
-    Broadcast {
-        message: id::MessageId,
-    },
-    BroadcastOk {},
-
-    Read {},
-    ReadOk {
-        messages: Vec<id::MessageId>,
-    },
-
-    Generate {},
-    GenerateOk {
-        id: id::MessageId,
-    },
-
-    Topology {
-        topology: HashMap<id::NodeId, Vec<id::NodeId>>,
-    },
-    TopologyOk {},
-
-    Error {
-        code: ErrorCode,
-        text: String,
-    },
+async fn wait_for_init(
+    messages_rx: &mut sync::mpsc::Receiver<protocol::Message>,
+    responses_tx: sync::mpsc::Sender<protocol::Message>,
+) -> Option<Node> {
+    while let Some(message) = messages_rx.recv().await {
+        if let protocol::Payload::Init { node_id, .. } = message.body.value {
+            let msg = protocol::Message {
+                src: node_id.into(),
+                dest: message.src,
+                body: protocol::Body {
+                    msg_id: None,
+                    in_reply_to: message.body.msg_id,
+                    value: protocol::Payload::InitOk {},
+                },
+            };
+            responses_tx.send(msg).await.expect("Channel error");
+            return Some(Node::new(node_id, responses_tx.clone()));
+        }
+    }
+    None
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-enum ErrorCode {
-    Timeout = 0,
-    NodeNotFound = 1,
-    NotSupported = 10,
-    TemporarilyUnavailable = 11,
-    MalformedRequest = 12,
-    Crash = 13,
-    Abort = 14,
-    KeyDoesNotExist = 20,
-    KeyAlreadyExists = 21,
-    PreconditionFailed = 22,
-    TransactionConflict = 30,
+async fn listen(node: Node, messages_rx: &mut sync::mpsc::Receiver<protocol::Message>) {
+    while let Some(message) = messages_rx.recv().await {
+        let mut node = node.clone();
+        tokio::spawn(async move {
+            node.handle_message(&message).await;
+        });
+    }
 }
 
+#[derive(Clone)]
 struct Node {
-    id: id::NodeId,
-    ids_counter: u64,
-    messages: HashSet<id::MessageId>,
-    neighbors: HashSet<id::NodeId>,
+    id: ids::NodeId,
+    ids_counter: Arc<atomic::AtomicU64>,
+    messages: Arc<RwLock<HashSet<ids::MessageId>>>,
+    neighbors: Arc<RwLock<HashSet<ids::NodeId>>>,
 
-    out: Stdout,
+    out: sync::mpsc::Sender<protocol::Message>,
 }
 
 impl Node {
-    fn new(id: id::NodeId, out: Stdout) -> Self {
+    fn new(id: ids::NodeId, out: sync::mpsc::Sender<protocol::Message>) -> Self {
         Self {
             id,
-            ids_counter: 0,
-            messages: HashSet::new(),
-            neighbors: HashSet::new(),
+            ids_counter: Arc::new(atomic::AtomicU64::new(0)),
+            messages: Arc::new(RwLock::new(HashSet::new())),
+            neighbors: Arc::new(RwLock::new(HashSet::new())),
             out,
         }
     }
 
-    fn generate_id(&mut self) -> id::MessageId {
-        self.ids_counter += 1;
-        let id = u64::from(self.id) << 32 | self.ids_counter;
+    fn generate_id(&mut self) -> ids::MessageId {
+        let counter = self.ids_counter.fetch_add(1, atomic::Ordering::SeqCst);
+        let id = u64::from(self.id) << 32 | counter;
         id.into()
     }
 
-    fn broadcast(&mut self, dest: id::NodeId, value: Value) {
-        let msg = Message {
+    async fn broadcast(&mut self, dest: ids::NodeId, value: protocol::Payload) {
+        let msg = protocol::Message {
             src: self.id.into(),
             dest: dest.into(),
-            body: Body {
-                msg_id: Some(self.generate_id()),
+            body: protocol::Body {
+                msg_id: None,
                 in_reply_to: None,
                 value,
             },
         };
-        send(&mut self.out, msg);
+        self.out.send(msg).await.expect("Channel error");
     }
 
-    fn reply(&mut self, src: Message, value: Value) {
-        let msg = Message {
-            src: self.id.into(),
-            dest: src.src,
-            body: Body {
-                msg_id: None,
-                in_reply_to: src.body.msg_id,
-                value,
-            },
-        };
-        send(&mut self.out, msg);
+    async fn reply(&mut self, src: &protocol::Message, value: protocol::Payload) {
+        if let Some(in_reply_to) = src.body.msg_id {
+            let msg = protocol::Message {
+                src: self.id.into(),
+                dest: src.src,
+                body: protocol::Body {
+                    msg_id: None,
+                    in_reply_to: Some(in_reply_to),
+                    value,
+                },
+            };
+            self.out.send(msg).await.expect("Channel error");
+        }
     }
 
-    fn handle_message(&mut self, msg: Message) {
+    async fn handle_message(&mut self, msg: &protocol::Message) {
         if msg.dest != self.id.into() {
             // Ignore messages not addressed to this node
             return;
@@ -145,98 +153,56 @@ impl Node {
             return;
         }
 
-        let value = match msg.body.value {
-            Value::Echo { ref echo } => Value::EchoOk { echo: echo.clone() },
-            Value::Generate {} => Value::GenerateOk {
-                id: self.generate_id(),
-            },
-            Value::Broadcast { message } => {
+        match &msg.body.value {
+            protocol::Payload::Echo { echo } => {
+                self.reply(msg, protocol::Payload::EchoOk { echo: echo.clone() })
+                    .await;
+            }
+            protocol::Payload::Generate {} => {
+                let id = self.generate_id();
+                self.reply(msg, protocol::Payload::GenerateOk { id }).await;
+            }
+            protocol::Payload::Broadcast { message } => {
                 // store the message
-                self.messages.insert(message);
+                self.messages.write().await.insert(*message);
 
                 let neighbors = self.neighbors.clone();
                 // broadcast to all neighbors except the sender
                 // to avoid infinite loops
-                for neighbor in neighbors {
+                for neighbor in neighbors.read().await.iter().copied() {
                     if msg.src == neighbor.into() {
                         continue;
                     }
-                    self.broadcast(neighbor, Value::Broadcast { message });
+                    self.broadcast(neighbor, protocol::Payload::Broadcast { message: *message })
+                        .await;
                 }
 
-                Value::BroadcastOk {}
+                self.reply(msg, protocol::Payload::BroadcastOk {}).await;
             }
-            Value::Read {} => Value::ReadOk {
-                messages: self.messages.iter().copied().collect(),
-            },
-            Value::Topology { ref topology } => {
-                self.neighbors = topology
+            protocol::Payload::Read {} => {
+                let messages = self.messages.read().await.iter().copied().collect();
+                self.reply(msg, protocol::Payload::ReadOk { messages })
+                    .await;
+            }
+            protocol::Payload::Topology { ref topology } => {
+                let neighbors = topology
                     .get(&self.id)
-                    .map(|v| v.iter().copied().collect())
+                    .map(|v| v.to_vec())
                     .unwrap_or_default();
-                Value::TopologyOk {}
+                self.neighbors.write().await.clear();
+                self.neighbors.write().await.extend(neighbors);
+                self.reply(msg, protocol::Payload::TopologyOk {}).await;
             }
-            _ => Value::Error {
-                code: ErrorCode::NotSupported,
-                text: "Not supported".to_string(),
-            },
-        };
-        self.reply(msg, value);
-    }
-}
-
-fn main() {
-    TermLogger::init(
-        LevelFilter::Info,
-        Config::default(),
-        simplelog::TerminalMode::Stderr,
-        simplelog::ColorChoice::Auto,
-    )
-    .expect("Logger init error");
-
-    let mut node: Option<Node> = None;
-    let stdin = io::stdin();
-    let mut stdout = io::stdout();
-
-    while let Some(line) = stdin.lock().lines().next() {
-        let line = line.expect("IO error");
-        let message = serde_json::from_str::<Message>(&line).expect("JSON parse error");
-
-        if let Some(node) = node.as_mut() {
-            node.handle_message(message)
-        } else if let Value::Init { node_id, .. } = message.body.value {
-            node = Some(Node::new(node_id, io::stdout()));
-            let msg = Message {
-                src: node_id.into(),
-                dest: message.src,
-                body: Body {
-                    msg_id: None,
-                    in_reply_to: message.body.msg_id,
-                    value: Value::InitOk {},
-                },
-            };
-            send(&mut stdout, msg);
-        } else {
-            let msg = Message {
-                src: id::NodeId::default().into(),
-                dest: message.src,
-                body: Body {
-                    msg_id: None,
-                    in_reply_to: message.body.msg_id,
-                    value: Value::Error {
-                        code: ErrorCode::PreconditionFailed,
-                        text: "node is not initialised".to_string(),
+            _ => {
+                self.reply(
+                    msg,
+                    protocol::Payload::Error {
+                        code: protocol::ErrorCode::NotSupported,
+                        text: "Not supported".to_string(),
                     },
-                },
-            };
-            send(&mut stdout, msg);
-        };
+                )
+                .await
+            }
+        }
     }
-}
-
-fn send(stdout: &mut Stdout, msg: Message) {
-    let mut handle = stdout.lock();
-    let msg = serde_json::to_string(&msg).expect("JSON serialize error");
-    handle.write_all(msg.as_bytes()).expect("IO error");
-    handle.write_all(b"\n").expect("IO error");
 }
