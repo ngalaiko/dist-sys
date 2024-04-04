@@ -52,3 +52,13 @@ jobs:
           node-count: 5
           time-limit: 20
           rate: 10
+
+      - name: "Challenge #3c: Fault Tolerant Broadcast"
+        uses: ./.github/actions/maelstrom-test
+        with:
+          bin: target/release/maelstrom
+          workload: broadcast
+          node-count: 5
+          time-limit: 20
+          rate: 10
+          nemesis: partition

@@ -1,16 +1,16 @@
 use crate::ids;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub src: ids::PeerId,
     pub dest: ids::PeerId,
     pub body: Body,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Body {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub msg_id: Option<ids::MessageId>,
@@ -20,7 +20,7 @@ pub struct Body {
     pub value: Payload,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum Payload {
     Echo {
@@ -52,7 +52,7 @@ pub enum Payload {
     },
 
     Topology {
-        topology: HashMap<ids::NodeId, Vec<ids::NodeId>>,
+        topology: HashMap<ids::NodeId, HashSet<ids::NodeId>>,
     },
     TopologyOk {},
 
@@ -62,7 +62,7 @@ pub enum Payload {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ErrorCode {
     Timeout = 0,
     NodeNotFound = 1,

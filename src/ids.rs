@@ -33,7 +33,7 @@ impl<'de> Deserialize<'de> for MessageId {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Eq, Hash, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub struct NodeId(u64);
 
 impl From<NodeId> for u64 {
