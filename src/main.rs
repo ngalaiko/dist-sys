@@ -1,9 +1,8 @@
 mod id;
 
 use std::collections::{HashMap, HashSet};
-use std::io::BufRead;
-use std::sync::Mutex;
-use std::{io, sync::Arc};
+use std::io;
+use std::io::{BufRead, Stdout, Write};
 
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
@@ -54,7 +53,7 @@ enum Value {
 
     Generate {},
     GenerateOk {
-        id: u64,
+        id: id::MessageId,
     },
 
     Topology {
@@ -83,128 +82,161 @@ enum ErrorCode {
     TransactionConflict = 30,
 }
 
-#[derive(Debug)]
-struct Error {
-    code: ErrorCode,
-    text: String,
-}
-
-impl From<Error> for Value {
-    fn from(error: Error) -> Self {
-        Value::Error {
-            code: error.code,
-            text: error.text,
-        }
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}: {}", self.code, self.text)
-    }
-}
-
-impl std::error::Error for Error {}
-
 struct Node {
     id: id::NodeId,
+    ids_counter: u64,
+    messages: HashSet<id::MessageId>,
+    neighbors: HashSet<id::NodeId>,
 
-    ids_counter: std::sync::atomic::AtomicU64,
-    messages: Arc<Mutex<HashSet<id::MessageId>>>,
+    out: Stdout,
 }
 
 impl Node {
-    fn new(id: id::NodeId) -> Self {
+    fn new(id: id::NodeId, out: Stdout) -> Self {
         Self {
             id,
-            ids_counter: std::sync::atomic::AtomicU64::new(0),
-            messages: Arc::new(Mutex::new(HashSet::new())),
+            ids_counter: 0,
+            messages: HashSet::new(),
+            neighbors: HashSet::new(),
+            out,
         }
     }
 
-    fn generate_id(&self) -> u64 {
-        let count = self
-            .ids_counter
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        u64::from(self.id) << 32 | count
+    fn generate_id(&mut self) -> id::MessageId {
+        self.ids_counter += 1;
+        let id = u64::from(self.id) << 32 | self.ids_counter;
+        id.into()
     }
 
-    fn store_message(&self, message: id::MessageId) {
-        self.messages
-            .lock()
-            .expect("Mutex lock error")
-            .insert(message);
+    fn broadcast(&mut self, dest: id::NodeId, value: Value) {
+        let msg = Message {
+            src: self.id.into(),
+            dest: dest.into(),
+            body: Body {
+                msg_id: Some(self.generate_id()),
+                in_reply_to: None,
+                value,
+            },
+        };
+        send(&mut self.out, msg);
     }
 
-    fn read_messages(&self) -> Vec<id::MessageId> {
-        self.messages
-            .lock()
-            .expect("Mutex lock error")
-            .iter()
-            .copied()
-            .collect()
+    fn reply(&mut self, src: Message, value: Value) {
+        let msg = Message {
+            src: self.id.into(),
+            dest: src.src,
+            body: Body {
+                msg_id: None,
+                in_reply_to: src.body.msg_id,
+                value,
+            },
+        };
+        send(&mut self.out, msg);
+    }
+
+    fn handle_message(&mut self, msg: Message) {
+        if msg.dest != self.id.into() {
+            // Ignore messages not addressed to this node
+            return;
+        }
+
+        if msg.body.in_reply_to.is_some() {
+            // Ignore replies for now
+            return;
+        }
+
+        let value = match msg.body.value {
+            Value::Echo { ref echo } => Value::EchoOk { echo: echo.clone() },
+            Value::Generate {} => Value::GenerateOk {
+                id: self.generate_id(),
+            },
+            Value::Broadcast { message } => {
+                // store the message
+                self.messages.insert(message);
+
+                let neighbors = self.neighbors.clone();
+                // broadcast to all neighbors except the sender
+                // to avoid infinite loops
+                for neighbor in neighbors {
+                    if msg.src == neighbor.into() {
+                        continue;
+                    }
+                    self.broadcast(neighbor, Value::Broadcast { message });
+                }
+
+                Value::BroadcastOk {}
+            }
+            Value::Read {} => Value::ReadOk {
+                messages: self.messages.iter().copied().collect(),
+            },
+            Value::Topology { ref topology } => {
+                self.neighbors = topology
+                    .get(&self.id)
+                    .map(|v| v.iter().copied().collect())
+                    .unwrap_or_default();
+                Value::TopologyOk {}
+            }
+            _ => Value::Error {
+                code: ErrorCode::NotSupported,
+                text: "Not supported".to_string(),
+            },
+        };
+        self.reply(msg, value);
     }
 }
 
 fn main() {
-    let mut node: Option<Node> = None;
-    let stdin = io::stdin();
-
     TermLogger::init(
         LevelFilter::Info,
         Config::default(),
         simplelog::TerminalMode::Stderr,
         simplelog::ColorChoice::Auto,
-    ).expect("Logger init error");
+    )
+    .expect("Logger init error");
+
+    let mut node: Option<Node> = None;
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
 
     while let Some(line) = stdin.lock().lines().next() {
         let line = line.expect("IO error");
-        log::info!("{:?}", line);
+        let message = serde_json::from_str::<Message>(&line).expect("JSON parse error");
 
-        let msg = serde_json::from_str::<Message>(&line).expect("JSON parse error");
-
-        let value = if let Some(node) = node.as_ref() {
-            match msg.body.value {
-                Value::Echo { echo } => Value::EchoOk { echo },
-                Value::Generate {} => Value::GenerateOk {
-                    id: node.generate_id(),
+        if let Some(node) = node.as_mut() {
+            node.handle_message(message)
+        } else if let Value::Init { node_id, .. } = message.body.value {
+            node = Some(Node::new(node_id, io::stdout()));
+            let msg = Message {
+                src: node_id.into(),
+                dest: message.src,
+                body: Body {
+                    msg_id: None,
+                    in_reply_to: message.body.msg_id,
+                    value: Value::InitOk {},
                 },
-                Value::Broadcast { message } => {
-                    node.store_message(message);
-                    Value::BroadcastOk {}
-                }
-                Value::Read {} => Value::ReadOk {
-                    messages: node.read_messages(),
-                },
-                Value::Topology { topology: _ } => Value::TopologyOk {},
-                _ => Value::Error {
-                    code: ErrorCode::NotSupported,
-                    text: "Not supported".to_string(),
-                },
-            }
-        } else if let Value::Init { node_id, .. } = msg.body.value {
-            node = Some(Node::new(node_id));
-            Value::InitOk {}
+            };
+            send(&mut stdout, msg);
         } else {
-            Value::Error {
-                code: ErrorCode::PreconditionFailed,
-                text: "node is not initialised".to_string(),
-            }
+            let msg = Message {
+                src: id::NodeId::default().into(),
+                dest: message.src,
+                body: Body {
+                    msg_id: None,
+                    in_reply_to: message.body.msg_id,
+                    value: Value::Error {
+                        code: ErrorCode::PreconditionFailed,
+                        text: "node is not initialised".to_string(),
+                    },
+                },
+            };
+            send(&mut stdout, msg);
         };
-
-        let reply = Message {
-            src: id::PeerId::Node(node.as_ref().map(|node| node.id).unwrap_or_default()),
-            dest: msg.src,
-            body: Body {
-                msg_id: Some(id::MessageId::next()),
-                in_reply_to: msg.body.msg_id,
-                value,
-            },
-        };
-
-        println!(
-            "{}",
-            serde_json::to_string(&reply).expect("JSON serialize error")
-        );
     }
+}
+
+fn send(stdout: &mut Stdout, msg: Message) {
+    let mut handle = stdout.lock();
+    let msg = serde_json::to_string(&msg).expect("JSON serialize error");
+    handle.write_all(msg.as_bytes()).expect("IO error");
+    handle.write_all(b"\n").expect("IO error");
 }

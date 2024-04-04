@@ -1,11 +1,13 @@
-use std::sync::atomic;
-
 use serde::{Deserialize, Serialize};
-
-static MESSAGE_COUNTER: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
 
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub struct MessageId(u64);
+
+impl From<u64> for MessageId {
+    fn from(id: u64) -> Self {
+        MessageId(id)
+    }
+}
 
 impl std::fmt::Display for MessageId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -28,12 +30,6 @@ impl<'de> Deserialize<'de> for MessageId {
         D: serde::Deserializer<'de>,
     {
         u64::deserialize(deserializer).map(MessageId)
-    }
-}
-
-impl MessageId {
-    pub fn next() -> Self {
-        MessageId(MESSAGE_COUNTER.fetch_add(1, atomic::Ordering::SeqCst) as u64)
     }
 }
 
@@ -71,14 +67,12 @@ impl<'de> Deserialize<'de> for NodeId {
             let num = stripped.parse().map_err(serde::de::Error::custom)?;
             Ok(NodeId(num))
         } else {
-            Err(serde::de::Error::custom(
-                "NodeId must start with 'n'",
-            ))
+            Err(serde::de::Error::custom("NodeId must start with 'n'"))
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClientId(u64);
 
 impl std::fmt::Display for ClientId {
@@ -106,17 +100,21 @@ impl<'de> Deserialize<'de> for ClientId {
             let num = striped.parse().map_err(serde::de::Error::custom)?;
             Ok(ClientId(num))
         } else {
-            Err(serde::de::Error::custom(
-                "ClientId must start with 'c'",
-            ))
+            Err(serde::de::Error::custom("ClientId must start with 'c'"))
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PeerId {
     Node(NodeId),
     Client(ClientId),
+}
+
+impl From<NodeId> for PeerId {
+    fn from(node_id: NodeId) -> Self {
+        PeerId::Node(node_id)
+    }
 }
 
 impl std::fmt::Display for PeerId {
@@ -150,9 +148,7 @@ impl<'de> Deserialize<'de> for PeerId {
             let num = stripped.parse().map_err(serde::de::Error::custom)?;
             Ok(PeerId::Client(ClientId(num)))
         } else {
-            Err(serde::de::Error::custom(
-                "Unknown id type",
-            ))
+            Err(serde::de::Error::custom("Unknown id type"))
         }
     }
 }
