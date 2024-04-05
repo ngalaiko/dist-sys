@@ -1,44 +1,17 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
-pub struct MessageId(u64);
-
-impl From<u64> for MessageId {
-    fn from(id: u64) -> Self {
-        MessageId(id)
-    }
-}
-
-impl std::fmt::Display for MessageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Serialize for MessageId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for MessageId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        u64::deserialize(deserializer).map(MessageId)
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub struct NodeId(u64);
 
 impl From<NodeId> for u64 {
     fn from(node_id: NodeId) -> u64 {
         node_id.0
+    }
+}
+
+impl From<u64> for NodeId {
+    fn from(num: u64) -> NodeId {
+        NodeId(num)
     }
 }
 

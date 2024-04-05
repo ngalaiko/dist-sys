@@ -1,7 +1,7 @@
 use crate::ids;
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -13,9 +13,9 @@ pub struct Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Body {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub msg_id: Option<ids::MessageId>,
+    pub msg_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub in_reply_to: Option<ids::MessageId>,
+    pub in_reply_to: Option<u64>,
     #[serde(flatten)]
     pub value: Payload,
 }
@@ -37,22 +37,22 @@ pub enum Payload {
     InitOk {},
 
     Broadcast {
-        message: ids::MessageId,
+        message: u64,
     },
     BroadcastOk {},
 
     Read {},
     ReadOk {
-        messages: Vec<ids::MessageId>,
+        messages: Vec<u64>,
     },
 
     Generate {},
     GenerateOk {
-        id: ids::MessageId,
+        id: u64,
     },
 
     Topology {
-        topology: HashMap<ids::NodeId, HashSet<ids::NodeId>>,
+        topology: HashMap<ids::NodeId, Vec<ids::NodeId>>,
     },
     TopologyOk {},
 

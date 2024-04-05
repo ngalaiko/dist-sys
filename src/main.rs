@@ -7,7 +7,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{self, RwLock};
 use tokio::{io, time};
 
-use maelstrom::{ids, protocol};
+use maelstrom::{ids, protocol, topology};
 
 #[tokio::main]
 async fn main() {
@@ -93,10 +93,11 @@ struct Node {
     id: ids::NodeId,
 
     ids_counter: Arc<atomic::AtomicU64>,
-    messages: Arc<RwLock<HashSet<ids::MessageId>>>,
-    topology: Arc<RwLock<HashMap<ids::NodeId, HashSet<ids::NodeId>>>>,
+    latest_message_id: Arc<atomic::AtomicU64>,
+    messages: Arc<RwLock<HashSet<u64>>>,
+    broadcast_to: Arc<RwLock<Vec<ids::NodeId>>>,
 
-    waiting_for: Arc<RwLock<HashMap<ids::MessageId, sync::oneshot::Sender<protocol::Message>>>>,
+    waiting_for: Arc<RwLock<HashMap<u64, sync::oneshot::Sender<protocol::Message>>>>,
 
     out: sync::mpsc::Sender<protocol::Message>,
 }
@@ -106,33 +107,12 @@ impl Node {
         Self {
             id,
             ids_counter: Arc::new(atomic::AtomicU64::new(0)),
+            latest_message_id: Arc::new(atomic::AtomicU64::new(0)),
             messages: Arc::new(RwLock::new(HashSet::new())),
-            topology: Arc::new(RwLock::new(HashMap::new())),
+            broadcast_to: Arc::new(RwLock::new(Vec::new())),
             waiting_for: Arc::new(RwLock::new(HashMap::new())),
             out,
         }
-    }
-
-    fn generate_id(&self) -> ids::MessageId {
-        let counter = self.ids_counter.fetch_add(1, atomic::Ordering::SeqCst);
-        let id = u64::from(self.id) << 32 | counter;
-        id.into()
-    }
-
-    #[allow(dead_code)]
-    async fn broadcast(&self, dest: ids::NodeId, value: protocol::Payload) {
-        self.out
-            .send(protocol::Message {
-                src: self.id.into(),
-                dest: dest.into(),
-                body: protocol::Body {
-                    msg_id: None,
-                    in_reply_to: None,
-                    value,
-                },
-            })
-            .await
-            .expect("Channel error");
     }
 
     async fn send(
@@ -141,12 +121,16 @@ impl Node {
         value: protocol::Payload,
         is_successful: impl Fn(&protocol::Payload) -> bool,
     ) {
-        let msg_id = self.generate_id();
+        let msg_id = self
+            .latest_message_id
+            .fetch_add(1, atomic::Ordering::SeqCst);
 
         let mut timeout_ms = 16;
         loop {
             let (tx, rx) = sync::oneshot::channel::<protocol::Message>();
-            self.waiting_for.write().await.insert(msg_id, tx);
+            {
+                self.waiting_for.write().await.insert(msg_id, tx);
+            }
 
             self.out
                 .send(protocol::Message {
@@ -169,17 +153,24 @@ impl Node {
                     if is_successful(&msg.body.value) {
                         break;
                     }
-                    log::warn!("Got an error reply to message {}, will retry", msg_id);
+                    log::warn!(
+                        "Got an error reply from node {} to message {}, will retry",
+                        dest,
+                        msg_id
+                    );
                 }
                 Err(_) => {
                     log::warn!(
-                        "Timeout waiting for reply to message {}, will retry",
+                        "Timeout waiting for reply from node {} to message {}, will retry",
+                        dest,
                         msg_id
                     );
                 }
             }
 
-            self.waiting_for.write().await.remove(&msg_id);
+            {
+                self.waiting_for.write().await.remove(&msg_id);
+            }
 
             timeout_ms *= 2;
         }
@@ -197,6 +188,8 @@ impl Node {
                 },
             };
             self.out.send(msg).await.expect("Channel error");
+        } else {
+            // Do not reply to a message that is not a request
         }
     }
 
@@ -227,7 +220,8 @@ impl Node {
                         .await;
                 }
                 protocol::Payload::Generate {} => {
-                    let id = self.generate_id();
+                    let counter = self.ids_counter.fetch_add(1, atomic::Ordering::SeqCst);
+                    let id = u64::from(self.id) << 32 | counter;
                     self.reply(msg, protocol::Payload::GenerateOk { id }).await;
                 }
                 protocol::Payload::Broadcast { message } => {
@@ -238,23 +232,18 @@ impl Node {
                         {
                             self.messages.write().await.insert(*message);
                         }
-                        self.reply(msg, protocol::Payload::BroadcastOk {}).await;
 
-                        let broadcast_to = if let ids::PeerId::Node(src_node_id) = msg.src {
-                            // if the message came from a node, broadcast to all neighbors except the sender
-                            let topology = self.topology.read().await;
-                            let neighbors = topology.get(&self.id).cloned().unwrap_or_default();
-                            neighbors.into_iter().filter(|node_id| *node_id != src_node_id).collect::<Vec<_>>()
-                        } else {
-                            // if the message came from a client, broadcast to all neighbors
-                            self.topology
+                        let broadcast_to = if let ids::PeerId::Node(src_id) = msg.src {
+                            self.broadcast_to
                                 .read()
                                 .await
-                                .get(&self.id)
-                                .cloned()
-                                .unwrap_or_default()
-                                .into_iter()
-                                .collect::<Vec<_>>()
+                                .clone()
+                                .iter()
+                                .copied()
+                                .filter(|node_id| !src_id.eq(node_id))
+                                .collect()
+                        } else {
+                            self.broadcast_to.write().await.clone()
                         };
 
                         let broadcasts = broadcast_to.into_iter().map(|node_id| {
@@ -265,7 +254,10 @@ impl Node {
                             )
                         });
 
-                        futures::future::join_all(broadcasts).await;
+                        futures::join!(
+                            futures::future::join_all(broadcasts),
+                            self.reply(msg, protocol::Payload::BroadcastOk {})
+                        );
                     }
                 }
                 protocol::Payload::Read {} => {
@@ -274,7 +266,10 @@ impl Node {
                         .await;
                 }
                 protocol::Payload::Topology { ref topology } => {
-                    *self.topology.write().await = topology.clone();
+                    let t = topology::Topology::from(topology);
+                    {
+                        *self.broadcast_to.write().await = t.next(self.id);
+                    }
                     self.reply(msg, protocol::Payload::TopologyOk {}).await;
                 }
                 _ => {
