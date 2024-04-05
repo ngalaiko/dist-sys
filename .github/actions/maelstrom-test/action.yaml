@@ -10,6 +10,10 @@ inputs:
     description: "How many nodes to run"
     required: false
     default: 0
+  latency:
+    description: "Mean network latency under normal operation, in ms"
+    required: false
+    default: 0
   time-limit:
     description: "Excluding setup and teardown, how long should a test run for, in seconds?"
     required: false
