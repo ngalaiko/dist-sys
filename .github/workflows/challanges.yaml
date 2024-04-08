@@ -103,3 +103,46 @@ jobs:
           time-limit: 20
           rate: 10
           nemesis: partition
+
+  challange-3d:
+    name: "Challenge #3d: Efficient Broadcast, Part I"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - uses: ./.github/actions/maelstrom-test
+        with:
+          bin: target/release/maelstrom-node
+          workload: broadcast
+          node-count: 25
+          time-limit: 20
+          rate: 100
+          latency: 100
+
+  challange-3e:
+    name: "Challenge #3e: Efficient Broadcast, Part II"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - uses: ./.github/actions/maelstrom-test
+        with:
+          bin: target/release/maelstrom-node
+          workload: broadcast
+          node-count: 25
+          time-limit: 20
+          rate: 100
+          latency: 100
+          nemesis: partition

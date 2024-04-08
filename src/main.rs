@@ -125,7 +125,7 @@ impl Node {
             .latest_message_id
             .fetch_add(1, atomic::Ordering::SeqCst);
 
-        let mut timeout_ms = 16;
+        let mut timeout_ms = 100;
         loop {
             let (tx, rx) = sync::oneshot::channel::<protocol::Message>();
             {
@@ -145,9 +145,7 @@ impl Node {
                 .await
                 .expect("Channel error");
 
-            let reply = time::timeout(time::Duration::from_millis(timeout_ms), rx).await;
-
-            match reply {
+            match time::timeout(time::Duration::from_millis(timeout_ms), rx).await {
                 Ok(msg) => {
                     let msg = msg.expect("Channel error");
                     if is_successful(&msg.body.value) {
@@ -161,7 +159,8 @@ impl Node {
                 }
                 Err(_) => {
                     log::warn!(
-                        "Timeout waiting for reply from node {} to message {}, will retry",
+                        "Timeout ({}ms) waiting for reply from node {} to message {}, will retry",
+                        timeout_ms,
                         dest,
                         msg_id
                     );
@@ -172,7 +171,7 @@ impl Node {
                 self.waiting_for.write().await.remove(&msg_id);
             }
 
-            timeout_ms *= 2;
+            timeout_ms = (timeout_ms as f64 * 1.5).floor() as u64;
         }
     }
 
@@ -200,18 +199,11 @@ impl Node {
         }
 
         if let Some(in_reply_to) = msg.body.in_reply_to {
-            // Check if this node is waiting for a reply to this message
             if let Some(tx) = self.waiting_for.write().await.remove(&in_reply_to) {
+                // Forward the reply to the waiting task
                 tx.send(msg.clone()).expect("Channel error");
             } else {
-                self.reply(
-                    msg,
-                    protocol::Payload::Error {
-                        code: protocol::ErrorCode::PreconditionFailed,
-                        text: "Got a reply to a message that was not sent".to_string(),
-                    },
-                )
-                .await;
+                // Ignore unexpected replies
             }
         } else {
             match &msg.body.value {
@@ -226,12 +218,15 @@ impl Node {
                 }
                 protocol::Payload::Broadcast { message } => {
                     if self.messages.read().await.contains(message) {
-                        // if the message is already seen, do not broadcast it
+                        // Do not broadcast the same message twice
                         self.reply(msg, protocol::Payload::BroadcastOk {}).await;
                     } else {
                         {
+                            // Remember the message
                             self.messages.write().await.insert(*message);
                         }
+
+                        self.reply(msg, protocol::Payload::BroadcastOk {}).await;
 
                         let broadcast_to = if let ids::PeerId::Node(src_id) = msg.src {
                             self.broadcast_to
@@ -240,10 +235,13 @@ impl Node {
                                 .clone()
                                 .iter()
                                 .copied()
-                                .filter(|node_id| !src_id.eq(node_id))
+                                .filter(|node_id| 
+                                    // Do not broadcast back to the sender
+                                    !src_id.eq(node_id)
+                                )
                                 .collect()
                         } else {
-                            self.broadcast_to.write().await.clone()
+                            self.broadcast_to.read().await.clone()
                         };
 
                         let broadcasts = broadcast_to.into_iter().map(|node_id| {
@@ -254,10 +252,7 @@ impl Node {
                             )
                         });
 
-                        futures::join!(
-                            futures::future::join_all(broadcasts),
-                            self.reply(msg, protocol::Payload::BroadcastOk {})
-                        );
+                        futures::future::join_all(broadcasts).await;
                     }
                 }
                 protocol::Payload::Read {} => {

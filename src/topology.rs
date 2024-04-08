@@ -64,21 +64,12 @@ impl Topology {
                         // broadcast next in the cycle
                         match c.len() {
                             1 => vec![],
-                            2 => {
-                                if position == 0 {
-                                    vec![c[1]]
-                                } else {
-                                    vec![c[0]]
-                                }
-                            }
+                            2 => c,
                             _ => {
-                                if position == 0 {
-                                    vec![c[1]]
-                                } else if position == c.len() - 1 {
-                                    vec![c[0]]
-                                } else {
-                                    vec![c[position + 1]]
-                                }
+                                vec![
+                                    c[(position + 1) % c.len()],
+                                    c[(position + c.len() - 1) % c.len()],
+                                ]
                             }
                         }
                     } else {
@@ -86,7 +77,7 @@ impl Topology {
                     }
                 })
                 .fold(Vec::new(), |mut acc, id| {
-                    if !acc.contains(&id) {
+                    if !acc.contains(&id) && id != node_id {
                         acc.push(id);
                     }
                     acc
@@ -188,10 +179,10 @@ mod tests {
         topology.insert(4.into(), vec![2.into(), 3.into()]);
         let topology = Topology::from(&topology);
 
-        assert_eq!(topology.next(1.into()), [3.into()]);
-        assert_eq!(topology.next(2.into()), [1.into()]);
-        assert_eq!(topology.next(3.into()), [4.into()]);
-        assert_eq!(topology.next(4.into()), [2.into()]);
+        assert_eq!(topology.next(1.into()), [3.into(), 2.into()]);
+        assert_eq!(topology.next(2.into()), [1.into(), 4.into()]);
+        assert_eq!(topology.next(3.into()), [4.into(), 1.into()]);
+        assert_eq!(topology.next(4.into()), [2.into(), 3.into()]);
     }
 
     #[test]
@@ -209,11 +200,11 @@ mod tests {
         topology.insert(4.into(), vec![1.into(), 3.into()]);
         let topology = Topology::from(&topology);
 
-        assert_eq!(topology.next(0.into()), [3.into()]);
-        assert_eq!(topology.next(1.into()), [0.into(), 2.into()]);
+        assert_eq!(topology.next(0.into()), [3.into(), 1.into()]);
+        assert_eq!(topology.next(1.into()), [0.into(), 4.into(), 2.into()]);
         assert_eq!(topology.next(2.into()), [1.into()]);
-        assert_eq!(topology.next(3.into()), [4.into()]);
-        assert_eq!(topology.next(4.into()), [1.into()]);
+        assert_eq!(topology.next(3.into()), [4.into(), 0.into()]);
+        assert_eq!(topology.next(4.into()), [1.into(), 3.into()]);
     }
 
     #[test]
@@ -232,12 +223,12 @@ mod tests {
         topology.insert(6.into(), vec![3.into(), 5.into()]);
         let topology = Topology::from(&topology);
 
-        assert_eq!(topology.next(1.into()), [4.into()]);
-        assert_eq!(topology.next(2.into()), [1.into()]);
-        assert_eq!(topology.next(3.into()), [2.into()]);
-        assert_eq!(topology.next(4.into()), [5.into()]);
-        assert_eq!(topology.next(5.into()), [6.into()]);
-        assert_eq!(topology.next(6.into()), [3.into()]);
+        assert_eq!(topology.next(1.into()), [4.into(), 2.into()]);
+        assert_eq!(topology.next(2.into()), [1.into(), 3.into()]);
+        assert_eq!(topology.next(3.into()), [2.into(), 6.into()]);
+        assert_eq!(topology.next(4.into()), [5.into(), 1.into()]);
+        assert_eq!(topology.next(5.into()), [6.into(), 4.into()]);
+        assert_eq!(topology.next(6.into()), [3.into(), 5.into()]);
     }
 
     #[test]
@@ -261,14 +252,14 @@ mod tests {
         topology.insert(9.into(), vec![6.into(), 8.into()]);
         let topology = Topology::from(&topology);
 
-        assert_eq!(topology.next(1.into()), [4.into()]);
-        assert_eq!(topology.next(2.into()), [1.into(), 3.into()]);
-        assert_eq!(topology.next(3.into()), [6.into()]);
-        assert_eq!(topology.next(4.into()), [7.into()]);
-        assert_eq!(topology.next(5.into()), [2.into()]);
-        assert_eq!(topology.next(6.into()), [5.into()]);
-        assert_eq!(topology.next(7.into()), [8.into()]);
-        assert_eq!(topology.next(8.into()), [9.into()]);
-        assert_eq!(topology.next(9.into()), [6.into()]);
+        assert_eq!(topology.next(1.into()), [4.into(), 2.into()]);
+        assert_eq!(topology.next(2.into()), [1.into(), 5.into(), 3.into()]);
+        assert_eq!(topology.next(3.into()), [6.into(), 2.into()]);
+        assert_eq!(topology.next(4.into()), [7.into(), 1.into()]);
+        assert_eq!(topology.next(5.into()), [2.into(), 6.into()]);
+        assert_eq!(topology.next(6.into()), [5.into(), 9.into(), 3.into()]);
+        assert_eq!(topology.next(7.into()), [8.into(), 4.into()]);
+        assert_eq!(topology.next(8.into()), [9.into(), 7.into()]);
+        assert_eq!(topology.next(9.into()), [6.into(), 8.into()]);
     }
 }
