@@ -13,10 +13,10 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release
+          args: --release --package echo-node
       - uses: ./.github/actions/maelstrom-test
         with: 
-          bin: target/release/maelstrom-node
+          bin: target/release/echo-node
           workload: echo
           node-count: 1
           time-limit: 10
@@ -32,10 +32,10 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release
+          args: --release --package unique-ids-node
       - uses: ./.github/actions/maelstrom-test
         with: 
-          bin: target/release/maelstrom-node
+          bin: target/release/unique-ids-node
           workload: unique-ids
           time-limit: 30
           rate: 1000
@@ -54,10 +54,10 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release
+          args: --release --package broadcast-node
       - uses: ./.github/actions/maelstrom-test
         with: 
-          bin: target/release/maelstrom-node
+          bin: target/release/broadcast-node
           workload: broadcast
           node-count: 1
           time-limit: 20
@@ -74,10 +74,10 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release
+          args: --release --package broadcast-node
       - uses: ./.github/actions/maelstrom-test
         with: 
-          bin: target/release/maelstrom-node
+          bin: target/release/broadcast-node
           workload: broadcast
           node-count: 5
           time-limit: 20
@@ -94,10 +94,10 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release
+          args: --release --package broadcast-node
       - uses: ./.github/actions/maelstrom-test
         with:
-          bin: target/release/maelstrom-node
+          bin: target/release/broadcast-node
           workload: broadcast
           node-count: 5
           time-limit: 20
@@ -115,10 +115,10 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release
+          args: --release --package broadcast-node
       - uses: ./.github/actions/maelstrom-test
         with:
-          bin: target/release/maelstrom-node
+          bin: target/release/broadcast-node
           workload: broadcast
           node-count: 25
           time-limit: 20
@@ -136,10 +136,10 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release
+          args: --release --package broadcast-node
       - uses: ./.github/actions/maelstrom-test
         with:
-          bin: target/release/maelstrom-node
+          bin: target/release/broadcast-node
           workload: broadcast
           node-count: 25
           time-limit: 20

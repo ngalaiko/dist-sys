@@ -1,20 +1,8 @@
-[package]
-name = "maelstrom-node"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-name = "maelstrom"
-path = "src/lib.rs"
-
-[[bin]]
-name = "maelstrom-node"
-path = "src/main.rs"
-
-[dependencies]
-futures = "0.3.30"
-log = "0.4"
-serde =  { version = "1.0",features = ["derive"] }
-serde_json = "1.0"
-simplelog = "0.12"
-tokio = { version = "1.37.0", features = ["rt", "rt-multi-thread", "macros", "io-std", "io-util", "sync", "time"] }
+[workspace]
+members = [
+    "maelstrom-node",
+    "echo-node",
+    "unique-ids-node",
+    "broadcast-node",
+]
+resolver = "2"
