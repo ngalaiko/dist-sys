@@ -12,7 +12,7 @@ use tokio::time;
 use tokio::time::Duration;
 use tokio::{spawn, sync};
 
-use maelstrom_node::{ids, protocol, read_from_stdin, wait_for_init, write_to_stdout, Handler};
+use maelstrom_node::{ids, protocol, read_from_stdin, write_to_stdout, Handler, Node};
 
 #[derive(Default, Clone)]
 struct BroadcastHandler {
@@ -41,20 +41,15 @@ struct BroadcastOkResponse {}
 struct ReadRequest {}
 
 impl Handler for BroadcastHandler {
-    async fn handle(
-        &self,
-        node: maelstrom_node::Node,
-        message: maelstrom_node::protocol::Message,
-        out: sync::mpsc::Sender<maelstrom_node::protocol::Message>,
-    ) {
+    async fn handle(&self, node: maelstrom_node::Node, message: maelstrom_node::protocol::Message) {
         if let Ok(request) = message.clone_into::<protocol::Request<TopologyRequest>>() {
             let t = topology::Topology::from(&request.payload.topology);
             {
                 *self.broadcast_to.write().await = t.next(node.id);
             }
-            let response =
-                protocol::Message::reply_for(&message, json!({})).expect("message error");
-            out.send(response).await.expect("Channel panic");
+            node.reply(&message, json!({}))
+                .await
+                .expect("failed to send reply")
         } else if let Ok(request) = message.clone_into::<protocol::Request<BroadcastRequest>>() {
             if self
                 .messages
@@ -62,21 +57,18 @@ impl Handler for BroadcastHandler {
                 .await
                 .contains(&request.payload.message)
             {
-                let response =
-                    protocol::Message::reply_for(&message, json!({})).expect("message error");
-                out.send(response).await.expect("Channel panic");
+                node.reply(&message, json!({}))
+                    .await
+                    .expect("failed to send reply");
             } else {
                 {
                     // Remember the message
                     self.messages.write().await.insert(request.payload.message);
                 }
 
-                // Reply
-                let response =
-                    protocol::Message::reply_for(&message, json!({})).expect("message error");
-                out.send(response).await.expect("Channel panic");
-
-                // Start broadcast
+                node.reply(&message, json!({}))
+                    .await
+                    .expect("failed to reply");
 
                 let broadcast_to = if let ids::PeerId::Node(src_id) = message.source() {
                     self.broadcast_to
@@ -95,7 +87,6 @@ impl Handler for BroadcastHandler {
 
                 let broadcasts = broadcast_to.into_iter().map(|node_id| {
                     spawn({
-                        let out = out.clone();
                         let node = node.clone();
                         async move {
                             let mut timeout_ms = 100;
@@ -105,10 +96,10 @@ impl Handler for BroadcastHandler {
                                     BroadcastRequest {
                                         message: request.payload.message,
                                     },
-                                    out.clone(),
                                 );
                                 let Ok(response) =
-                                    time::timeout(Duration::from_millis(timeout_ms), response).await
+                                    time::timeout(Duration::from_millis(timeout_ms), response)
+                                        .await
                                 else {
                                     timeout_ms = (timeout_ms as f64 * 1.5) as u64;
                                     continue;
@@ -132,9 +123,9 @@ impl Handler for BroadcastHandler {
             .is_ok()
         {
             let messages = { self.messages.read().await.clone() };
-            let response = protocol::Message::reply_for(&message, json!({"messages": messages}))
-                .expect("message error");
-            out.send(response).await.expect("Channel panic");
+            node.reply(&message, json!({"messages": messages}))
+                .await
+                .expect("failed to send message");
         } else {
             // Ignore unknown requests
         }
@@ -148,8 +139,8 @@ async fn main() {
     let (responses_tx, responses_rx) = sync::mpsc::channel(100);
     let handle = spawn(write_to_stdout(responses_rx));
 
-    let node = wait_for_init(&mut requests_rx, responses_tx.clone()).await;
-    node.listen(&mut requests_rx, responses_tx, BroadcastHandler::default())
+    let node = Node::initialize(&mut requests_rx, responses_tx.clone()).await;
+    node.listen(&mut requests_rx, BroadcastHandler::default())
         .await;
 
     handle.await.expect("Task panic");

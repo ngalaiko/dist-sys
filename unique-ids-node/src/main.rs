@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::{spawn, sync};
 
-use maelstrom_node::{protocol, read_from_stdin, wait_for_init, write_to_stdout, Handler};
+use maelstrom_node::{protocol, read_from_stdin, write_to_stdout, Handler, Node};
 
 #[derive(Default, Clone)]
 struct UniqueIdsHandler {
@@ -17,12 +17,7 @@ struct UniqueIdsHandler {
 struct GenerateRequest {}
 
 impl Handler for UniqueIdsHandler {
-    async fn handle(
-        &self,
-        node: maelstrom_node::Node,
-        message: maelstrom_node::protocol::Message,
-        out: sync::mpsc::Sender<maelstrom_node::protocol::Message>,
-    ) {
+    async fn handle(&self, node: maelstrom_node::Node, message: maelstrom_node::protocol::Message) {
         let Ok(_) = message.clone_into::<protocol::Request<GenerateRequest>>() else {
             return;
         };
@@ -32,9 +27,9 @@ impl Handler for UniqueIdsHandler {
         // This gives us 2^32 unique ids for every of 2^32 nodes.
         let id = u64::from(node.id) << 32 | counter;
 
-        let response = maelstrom_node::protocol::Message::reply_for(&message, json!({"id": id}))
-            .expect("Message panic");
-        out.send(response).await.expect("Channel panic");
+        node.reply(&message, json!({"id": id}))
+            .await
+            .expect("failed to reply")
     }
 }
 
@@ -45,8 +40,8 @@ async fn main() {
     let (responses_tx, responses_rx) = sync::mpsc::channel(100);
     let handle = spawn(write_to_stdout(responses_rx));
 
-    let node = wait_for_init(&mut requests_rx, responses_tx.clone()).await;
-    node.listen(&mut requests_rx, responses_tx, UniqueIdsHandler::default())
+    let node = Node::initialize(&mut requests_rx, responses_tx.clone()).await;
+    node.listen(&mut requests_rx, UniqueIdsHandler::default())
         .await;
 
     handle.await.expect("Task panic");
