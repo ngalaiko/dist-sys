@@ -1,8 +1,10 @@
 [workspace]
 members = [
-    "maelstrom-node",
-    "echo-node",
-    "unique-ids-node",
     "broadcast-node",
+    "echo-node",
+    "g-counter-node",
+    "maelstrom-node",
+    "kv",
+    "unique-ids-node",
 ]
 resolver = "2"

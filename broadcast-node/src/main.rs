@@ -92,7 +92,7 @@ impl Handler for BroadcastHandler {
                             let mut timeout_ms = 100;
                             loop {
                                 let response = node.send::<BroadcastOkResponse>(
-                                    node_id,
+                                    node_id.into(),
                                     BroadcastRequest {
                                         message: request.payload.message,
                                     },

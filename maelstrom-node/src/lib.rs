@@ -20,6 +20,7 @@ pub async fn write_to_stdout(mut responses_rx: sync::mpsc::Receiver<protocol::Me
     let mut stdout = io::stdout();
     while let Some(response) = responses_rx.recv().await {
         let raw = serde_json::to_string(&response).expect("JSON serialize error");
+        log::info!("-> {}", raw);
         stdout.write_all(raw.as_bytes()).await.expect("IO error");
         stdout.write_all(b"\n").await.expect("IO error");
     }
@@ -31,10 +32,16 @@ pub async fn read_from_stdin() -> sync::mpsc::Receiver<protocol::Message> {
         let reader = io::BufReader::new(io::stdin());
         let mut lines = reader.lines();
         while let Some(line) = lines.next_line().await.expect("IO error") {
-            let Ok(message) = serde_json::from_str(&line) else {
-                continue;
-            };
-            tx.send(message).await.expect("Channel error");
+            log::info!("<- {}", line);
+            match serde_json::from_str(&line) {
+                Ok(message) => {
+                    tx.send(message).await.expect("Channel error");
+                }
+                Err(error) => {
+                    dbg!(&error);
+                    log::error!("failed to parse message: {error}");
+                }
+            }
         }
     });
     rx
@@ -48,6 +55,53 @@ pub struct Node {
     waiting_for: Arc<RwLock<HashMap<u64, sync::oneshot::Sender<protocol::Response>>>>,
 
     responses_tx: sync::mpsc::Sender<protocol::Message>,
+}
+
+#[derive(Debug)]
+pub enum SendError {
+    Json(serde_json::Error),
+    Response(ErrorResponse),
+}
+
+impl From<serde_json::Error> for SendError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Json(value)
+    }
+}
+
+impl From<ErrorResponse> for SendError {
+    fn from(value: ErrorResponse) -> Self {
+        Self::Response(value)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename = "error")]
+pub struct ErrorResponse {
+    code: ErrorCode,
+    text: String,
+}
+
+impl std::fmt::Display for ErrorResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}: {}", self.code, self.text)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ErrorCode {
+    Timeout = 0,
+    NodeNotFound = 1,
+    NotSupported = 10,
+    TemporarilyUnavailable = 11,
+    MalformedRequest = 12,
+    Crash = 13,
+    Abort = 14,
+    KeyDoesNotExist = 20,
+    KeyAlreadyExists = 21,
+    PreconditionFailed = 22,
+    TxnConflict = 30,
 }
 
 impl Node {
@@ -121,26 +175,29 @@ impl Node {
 
     pub async fn send<R: DeserializeOwned>(
         &self,
-        dest: ids::NodeId,
+        dest: ids::PeerId,
         body: impl Serialize,
-    ) -> Result<R, serde_json::Error> {
+    ) -> Result<R, SendError> {
         let msg_id = self
             .latest_message_id
             .fetch_add(1, atomic::Ordering::SeqCst);
 
-        let request = protocol::Message::request_to(self.id, dest.into(), msg_id, body)?;
+        let request = protocol::Message::request_to(self.id, dest, msg_id, body)?;
         self.responses_tx
             .send(request)
             .await
             .expect("Channel error");
 
-        self.wait_for_reply(msg_id).await
+        let response = self.wait_for_reply(msg_id).await;
+
+        if let Ok(error) = response.clone().into::<ErrorResponse>() {
+            Err(error.into())
+        } else {
+            Ok(response.into::<R>().map_err(SendError::from)?)
+        }
     }
 
-    async fn wait_for_reply<R: DeserializeOwned>(
-        &self,
-        msg_id: u64,
-    ) -> Result<R, serde_json::Error> {
+    async fn wait_for_reply(&self, msg_id: u64) -> protocol::Response {
         let (tx, rx) = sync::oneshot::channel::<protocol::Response>();
         {
             self.waiting_for.write().await.insert(msg_id, tx);
@@ -152,6 +209,6 @@ impl Node {
             self.waiting_for.write().await.remove(&msg_id);
         }
 
-        response.into()
+        response
     }
 }
