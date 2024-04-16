@@ -61,7 +61,7 @@ impl SeqKV {
         Ok(())
     }
 
-    pub async fn cas<R: DeserializeOwned>(
+    pub async fn cas(
         &self,
         key: impl ToString,
         from: impl Serialize,

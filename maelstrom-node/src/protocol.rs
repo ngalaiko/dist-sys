@@ -95,7 +95,7 @@ pub struct Response {
 }
 
 impl Response {
-    pub fn into<P: DeserializeOwned>(self) -> Result<P, serde_json::Error> {
+    pub fn try_into<P: DeserializeOwned>(self) -> Result<P, serde_json::Error> {
         serde_json::from_value(serde_json::Value::Object(self.payload))
     }
 }

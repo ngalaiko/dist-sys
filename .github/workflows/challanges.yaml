@@ -146,3 +146,24 @@ jobs:
           rate: 100
           latency: 100
           nemesis: partition
+
+  challange-4:
+    name: "Challenge #4: Grow-Only Counter"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --package g-counter-node
+      - uses: ./.github/actions/maelstrom-test
+        with:
+          bin: target/release/g-counter-node
+          workload: g-counter
+          node-count: 25
+          time-limit: 20
+          rate: 100
+          nemesis: partition

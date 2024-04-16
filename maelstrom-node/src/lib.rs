@@ -5,6 +5,7 @@ use std::sync::{atomic, Arc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use serde_repr::{Deserialize_repr, Serialize_repr};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 use tokio::{io, spawn, sync};
@@ -50,6 +51,7 @@ pub async fn read_from_stdin() -> sync::mpsc::Receiver<protocol::Message> {
 #[derive(Clone)]
 pub struct Node {
     pub id: ids::NodeId,
+    pub node_ids: Vec<ids::NodeId>,
 
     latest_message_id: Arc<atomic::AtomicU64>,
     waiting_for: Arc<RwLock<HashMap<u64, sync::oneshot::Sender<protocol::Response>>>>,
@@ -62,6 +64,17 @@ pub enum SendError {
     Json(serde_json::Error),
     Response(ErrorResponse),
 }
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Json(error) => write!(f, "{error}"),
+            Self::Response(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
 
 impl From<serde_json::Error> for SendError {
     fn from(value: serde_json::Error) -> Self {
@@ -78,8 +91,8 @@ impl From<ErrorResponse> for SendError {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename = "error")]
 pub struct ErrorResponse {
-    code: ErrorCode,
-    text: String,
+    pub code: ErrorCode,
+    pub text: String,
 }
 
 impl std::fmt::Display for ErrorResponse {
@@ -88,8 +101,8 @@ impl std::fmt::Display for ErrorResponse {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Serialize_repr, Deserialize_repr, PartialEq, Eq)]
+#[repr(u8)]
 pub enum ErrorCode {
     Timeout = 0,
     NodeNotFound = 1,
@@ -117,6 +130,7 @@ impl Node {
             #[serde(tag = "type", rename = "init")]
             struct InitRequest {
                 node_id: ids::NodeId,
+                node_ids: Vec<ids::NodeId>,
             }
             let Ok(request) = message.clone_into::<protocol::Request<InitRequest>>() else {
                 continue;
@@ -124,13 +138,22 @@ impl Node {
             let response =
                 protocol::Message::reply_for(&message, json!({})).expect("failed to make response");
             responses_tx.send(response).await.expect("Send failed");
-            return Self::new(request.payload.node_id, responses_tx);
+            return Self::new(
+                request.payload.node_id,
+                request.payload.node_ids,
+                responses_tx,
+            );
         }
     }
 
-    fn new(id: ids::NodeId, responses_tx: sync::mpsc::Sender<protocol::Message>) -> Self {
+    fn new(
+        id: ids::NodeId,
+        node_ids: Vec<ids::NodeId>,
+        responses_tx: sync::mpsc::Sender<protocol::Message>,
+    ) -> Self {
         Self {
             id,
+            node_ids,
             latest_message_id: Arc::new(atomic::AtomicU64::new(0)),
             waiting_for: Arc::new(RwLock::new(HashMap::new())),
             responses_tx,
@@ -190,10 +213,10 @@ impl Node {
 
         let response = self.wait_for_reply(msg_id).await;
 
-        if let Ok(error) = response.clone().into::<ErrorResponse>() {
+        if let Ok(error) = response.clone().try_into::<ErrorResponse>() {
             Err(error.into())
         } else {
-            Ok(response.into::<R>().map_err(SendError::from)?)
+            Ok(response.try_into::<R>().map_err(SendError::from)?)
         }
     }
 
@@ -211,4 +234,18 @@ impl Node {
 
         response
     }
+}
+
+#[test]
+fn test_error() {
+    let raw = r#"{"id":27,"src":"seq-kv","dest":"n0","body":{"type":"error","code":20,"text":"key does not exist","in_reply_to":3}}"#;
+    let msg = serde_json::from_str::<protocol::Message>(raw).expect("failed to parse as message");
+    let response = msg
+        .clone_into::<protocol::Response>()
+        .expect("failed to parse as response");
+    let error = response
+        .try_into::<ErrorResponse>()
+        .expect("failed to parse as error");
+    assert_eq!(error.code, ErrorCode::KeyDoesNotExist);
+    assert_eq!(error.text, "key does not exist");
 }
