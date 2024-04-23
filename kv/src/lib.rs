@@ -2,13 +2,24 @@ use maelstrom_node::{ids, Node, SendError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 #[derive(Clone)]
-pub struct SeqKV {
+pub struct KV {
+    id: ids::Store,
     node: Node,
 }
 
-impl SeqKV {
-    pub fn new(node: Node) -> Self {
-        Self { node }
+impl KV {
+    pub fn new_seq(node: Node) -> Self {
+        Self {
+            node,
+            id: ids::Store::Seq,
+        }
+    }
+
+    pub fn new_lin(node: Node) -> Self {
+        Self {
+            node,
+            id: ids::Store::Lin,
+        }
     }
 
     pub async fn read<R: DeserializeOwned>(&self, key: impl ToString) -> Result<R, SendError> {
@@ -26,7 +37,7 @@ impl SeqKV {
         let response = self
             .node
             .send::<ReadResponse<R>>(
-                ids::Store::Seq.into(),
+                self.id.into(),
                 ReadRequest {
                     key: key.to_string(),
                 },
@@ -50,7 +61,7 @@ impl SeqKV {
 
         self.node
             .send::<WriteResponse>(
-                ids::Store::Seq.into(),
+                self.id.into(),
                 WriteRequest {
                     key: key.to_string(),
                     value,
@@ -82,7 +93,7 @@ impl SeqKV {
 
         self.node
             .send::<CasResponse>(
-                ids::Store::Seq.into(),
+                self.id.into(),
                 CasRequest {
                     key: key.to_string(),
                     from,

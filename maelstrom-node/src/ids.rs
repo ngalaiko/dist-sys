@@ -138,6 +138,7 @@ impl<'de> Deserialize<'de> for PeerId {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Store {
     Seq,
+    Lin,
 }
 
 impl From<Store> for PeerId {
@@ -150,6 +151,7 @@ impl std::fmt::Display for Store {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Seq => write!(f, "seq-kv"),
+            Self::Lin => write!(f, "lin-kv"),
         }
     }
 }
@@ -163,6 +165,7 @@ impl std::str::FromStr for Store {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "seq-kv" => Ok(Self::Seq),
+            "lin-kv" => Ok(Self::Lin),
             _ => Err(ParseStoreError),
         }
     }

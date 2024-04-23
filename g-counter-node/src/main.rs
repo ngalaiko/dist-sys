@@ -10,14 +10,14 @@ use maelstrom_node::{
 
 #[derive(Clone)]
 struct GCounterHandler {
-    store: kv::SeqKV,
+    store: kv::KV,
 
     counter: Arc<atomic::AtomicI64>,
     delta: Arc<atomic::AtomicI64>,
 }
 
 impl GCounterHandler {
-    pub fn new(store: kv::SeqKV) -> Self {
+    pub fn new(store: kv::KV) -> Self {
         Self {
             store,
             counter: Arc::new(atomic::AtomicI64::new(0)),
@@ -115,7 +115,7 @@ async fn main() {
     let handle = spawn(write_to_stdout(responses_rx));
 
     let node = Node::initialize(&mut requests_rx, responses_tx.clone()).await;
-    let store = kv::SeqKV::new(node.clone());
+    let store = kv::KV::new_seq(node.clone());
 
     node.listen(&mut requests_rx, GCounterHandler::new(store))
         .await;
