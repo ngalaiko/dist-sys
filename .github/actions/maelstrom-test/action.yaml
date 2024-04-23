@@ -25,7 +25,7 @@ inputs:
   availability:
     description: "The fraction of client requests which must succeed. Either a number from 0 to 1 or total. If omitted, always valid."
     required: false
-    default: "total"
+    default: ""
   nemesis:
     description: "A comma-separated list of faults to inject."
     required: false
@@ -63,7 +63,7 @@ runs:
           --time-limit "${{ inputs.time-limit }}" \
           --availability "${{ inputs.availability }}" \
           --concurrency "${{ inputs.concurrency }}" \
-          --concurrency "${{ inputs.rate }}" \
+          --rate "${{ inputs.rate }}" \
           --nemesis "${{ inputs.nemesis }}"
 
     - uses: actions/upload-artifact@v4
