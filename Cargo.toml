@@ -3,6 +3,7 @@ members = [
     "broadcast-node",
     "echo-node",
     "g-counter-node",
+    "kafka-node",
     "maelstrom-node",
     "kv",
     "unique-ids-node",
