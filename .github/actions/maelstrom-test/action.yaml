@@ -63,6 +63,7 @@ runs:
           --time-limit "${{ inputs.time-limit }}" \
           --availability "${{ inputs.availability }}" \
           --concurrency "${{ inputs.concurrency }}" \
+          --concurrency "${{ inputs.rate }}" \
           --nemesis "${{ inputs.nemesis }}"
 
     - uses: actions/upload-artifact@v4
